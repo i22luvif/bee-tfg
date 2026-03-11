@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+
+# Entornos
+.venv/
+venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Datos y salidas pesadas (no subir)
+data/raw/*
+data/processed/*
+data/annotations/*
+runs/*
+
+# Mantener placeholders
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/annotations/.gitkeep
+!runs/.gitkeep
+
+# Config local
+configs/*.local.*
+
+Labeled dataset for bee detection and direction estimation on beehive landing boards/
