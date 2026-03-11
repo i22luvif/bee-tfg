@@ -84,11 +84,25 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-**4. Inicia la aplicación:**
+**4. Introduce los videos y el modelo dentro de sus respectivas carpetas**
+*(Asegúrate de colocar al menos un vídeo de prueba en la carpeta `data/raw/` y tu modelo entrenado en `model/`).*
+
+
+**5. Inicia la aplicación:**
 ```bash
 streamlit run app.py
 ```
-*(Asegúrate de colocar al menos un vídeo de prueba en la carpeta `data/raw/` y tu modelo entrenado en `model/`).*
+
+
+## 📹 Dataset y Vídeos de Prueba
+Debido a las restricciones de tamaño de GitHub, los vídeos originales utilizados para las pruebas de este prototipo no están incluidos directamente en el repositorio.
+
+Puedes descargar los vídeos de prueba desde el siguiente enlace:
+
+https://drive.google.com/drive/folders/1UhLhz-O8WHCxz9ILM2cIvV89JZWFl5_a?usp=sharing
+
+Una vez descargados, colócalos dentro de la carpeta data/raw/ de tu proyecto local para que la aplicación web pueda detectarlos.
+
 
 ## 🛤️ Siguientes Pasos (Fase 2)
 
