@@ -1,4 +1,3 @@
-
 import streamlit as st
 import cv2
 import os
@@ -67,11 +66,14 @@ if st.button("¡Iniciar Análisis Avanzado!"):
         # Unimos el nombre de la carpeta y el del vídeo (ej: "data/raw" + "video.mp4" = "data/raw/video.mp4")
         ruta_video = os.path.join(carpeta_videos, video_elegido)
         
+        # --- CORRECCIÓN DE SEGURIDAD (Ruta absoluta para que OpenCV encuentre el vídeo siempre) ---
+        ruta_absoluta = os.path.abspath(ruta_video)
+        
         # Cargamos la red neuronal en la memoria del ordenador.
         modelo = YOLO(modelo_elegido)
         
-        # Le decimos a OpenCV que abra el archivo de vídeo para empezar a extraer fotos.
-        video = cv2.VideoCapture(ruta_video)
+        # Le decimos a OpenCV que abra el archivo de vídeo usando la ruta absoluta.
+        video = cv2.VideoCapture(ruta_absoluta)
         
         # Definimos dónde y cómo se va a guardar el vídeo con los recuadros dibujados.
         ruta_salida = "runs/detect/video_procesado.mp4"
@@ -104,7 +106,7 @@ if st.button("¡Iniciar Análisis Avanzado!"):
             if not exito:
                 # Mostramos el mensaje final de éxito en la web y rompemos (break) el bucle infinito.
                 st.success(f"¡Análisis completado! Se han detectado {len(abejas_unicas)} abejas únicas en total.")
-                break
+                break # <--- Asegurado que este break rompa el bucle
             
             # Pasamos la foto y los parámetros que el usuario eligió en la web a YOLO.
             # persist=True es vital para que el Tracker no olvide a las abejas del fotograma anterior.

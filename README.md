@@ -49,6 +49,18 @@ bee-tfg/
 │  ├─ processed/      # Vídeos procesados (p.ej. recorte ROI, reescalado, etc.)
 │  ├─ annotations/    # Etiquetas/GT (YOLO/COCO/MOT) exportadas desde CVAT/Label Studio
 │  └─ images/         # Imagenes para validar
+│─ datasets/
+│  ├─ raw/                     <-- [Almacén de lectura] Datos originales descargados
+│  │  ├─ mendeley/             <-- Tus secuencias originales (seq1, seq2...)
+│  │  ├─ bee24/                <-- El dataset científico de validación
+│  │  └─ bee2/                 <-- El otro dataset científico
+│  │
+│  └─ ready_for_yolo/          <-- [Almacén de escritura] Datasets limpios generados por ti
+│     └─ mendeley_yolo/        <-- ¡AQUÍ irá el resultado del script prepare_data.py!
+│        ├─ train/             
+│        ├─ val/               
+│        ├─ test/              
+│        └─ data.yaml
 ├─ src/               # Código reutilizable (módulos del proyecto)
 ├─ scripts/           # Scripts ejecutables (pipeline: recorte, detección, exportaciones)
 ├─ configs/           # Configuraciones (p.ej. ROI, trackers, parámetros)
@@ -110,4 +122,28 @@ Una vez descargados, colócalos dentro de la carpeta data/raw/ de tu proyecto lo
 - Anotar manualmente un subconjunto de los vídeos reales para hacer *Fine-tuning* del modelo actual.
 - Implementar la Lógica de Cruce de Línea en `app.py`: Trazar una línea virtual en la pantalla y calcular vectores de movimiento de los IDs para diferenciar qué abejas entran y cuáles salen.
 - Extracción de métricas de rendimiento y redacción de la memoria del TFG.
+
+
+## 🚀 Fase 2 Seguimiento Avanzado (Multi-Object Tracking - MOT)
+
+Para dotar al Trabajo de Fin de Grado (TFG) del máximo rigor científico, se ha trascendido el uso de los rastreadores integrados por defecto en YOLO (que limitaban la comparativa) y se ha implementado la librería de investigación académica **BoxMOT**. Esto ha permitido realizar un *benchmark* (evaluación comparativa) enfrentando a 5 de los algoritmos de seguimiento multiobjeto más punteros del estado del arte.
+
+
+### 🎯 Los 5 Algoritmos Evaluados (El "Big 5")
+
+1. **ByteTrack**: Algoritmo puramente cinemático/geométrico. Destaca por su alta velocidad, ya que asocia objetos basándose exclusivamente en el solapamiento de las cajas delimitadoras (IoU) sin requerir redes neuronales secundarias complejas.
+2. **BoT-SORT**: Mejora los algoritmos tradicionales añadiendo compensación del movimiento de la cámara y un mejor manejo del estado de los objetos. En nuestras pruebas iniciales, ha demostrado ser el rastreador **más estable** para lidiar con las oclusiones masivas en la entrada de la colmena (piquera).
+3. **OC-SORT (Observation-Centric SORT)**: Diseñado específicamente para mantener el rastro de objetos que se ocultan temporalmente y que presentan movimientos caóticos o no lineales, características idóneas para el vuelo de los insectos.
+4. **StrongSORT**: Evolución avanzada que utiliza ReID (Re-Identificación) mediante una red neuronal secundaria (ej. *osnet*) para extraer características visuales de los objetos y diferenciarlos por su "textura".
+5. **DeepOCSORT**: La evolución de vanguardia del clásico DeepSORT, combinando la robustez geométrica de OC-SORT con la extracción de características profundas.
+   > **⚠️ Nota Técnica de Actualización (DeepSORT vs DeepOCSORT):** > Durante el desarrollo de la investigación, se constató que el algoritmo clásico `DeepSORT` ha quedado obsoleto y ha sido eliminado de las versiones recientes de librerías modernas de tracking (como `boxmot`), en parte debido a incompatibilidades con arquitecturas matemáticas modernas (NumPy 2.0). Por rigor académico, fue sustituido en la comparativa por su variante moderna y superior, **DeepOCSORT**.
+
+### 🧠 Descubrimiento Científico Clave (ReID vs Geometría)
+Las pruebas empíricas han revelado una conclusión vital para el estudio de insectos: **Los algoritmos basados en el reconocimiento de apariencia (ReID)**, como StrongSORT o DeepOCSORT, resultan contraproducentes para el rastreo de abejas. 
+
+Al ser estos insectos visualmente idénticos entre sí, la red neuronal secundaria (*feature extractor*) se confunde al intentar encontrar diferencias en sus texturas, lo que provoca constantes cambios de identificador (Fragmentación de IDs). Por el contrario, los **trackers puramente geométricos o cinemáticos** (BoT-SORT, ByteTrack, OC-SORT) ofrecen un rendimiento muy superior al guiarse únicamente por trayectorias espaciales.
+
+### 🛠️ Próximos Pasos
+* Integración del modelo entrenado de mayor profundidad (**YOLOv8 Medium**) para reducir los falsos negativos temporales (parpadeos de detección) que alimentan al Tracker.
+* Implementación de una interfaz gráfica avanzada en **Streamlit** para visualizar las métricas y los seguimientos en tiempo real.
 
