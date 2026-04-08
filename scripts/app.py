@@ -1,181 +1,174 @@
 import streamlit as st
-import cv2
+import subprocess
 import os
-from ultralytics import YOLO
-
-# Configuramos la página web para que ocupe todo el ancho de la pantalla.
-# Por defecto, Streamlit centra todo en una columna estrecha. Al procesar vídeo, necesitamos espacio visual.
-st.set_page_config(page_title="Detector de Abejas", layout="wide") 
-
-# Ponemos el título principal en la parte superior de la web.
-st.title("TFG - Panel Avanzado de Detección 🐝")
+import sys
 
 # ==========================================
-# ZONA 1: LA BARRA LATERAL (FRONTEND)
+# 1. CONFIGURACIÓN DE PÁGINA
 # ==========================================
-
-# Creamos un título específico para el menú de la izquierda (sidebar).
-st.sidebar.header("⚙️ Hiperparámetros de YOLO")
-
-# Creamos un desplegable para elegir el archivo del modelo entrenado.
-modelo_elegido = st.sidebar.selectbox("Modelo de IA:", ("model/best_bee.pt",))
-
-# Creamos cajas numéricas para que el usuario introduzca la Confianza y el IoU.
-confianza = st.sidebar.number_input("Confianza mínima (conf):", min_value=0.01, max_value=1.0, value=0.40, placeholder="Type a number...")
-iou_valor = st.sidebar.number_input("Solapamiento máximo (IoU):", min_value=0.01, max_value=1.0, value=0.50, placeholder="Type a number...")
-
-# Desplegable para el tamaño al que YOLO redimensionará la imagen antes de pensar.
-tamano_img = st.sidebar.selectbox("Resolución de análisis (imgsz):", (320, 640, 1024), index=1)
-
-# Dibuja una línea horizontal gris. 
-st.sidebar.divider() 
-
-# Menú para elegir el algoritmo de rastreo (Tracker).
-st.sidebar.header("🎯 Configuración del Tracker")
-tracker_elegido = st.sidebar.selectbox("Algoritmo de Rastreo:", ("botsort.yaml", "bytetrack.yaml"))
-st.sidebar.info("💡 ByteTrack es más rápido, pero BoT-SORT es mejor recuperando abejas que se ocultan detrás de otras.")
-
+st.set_page_config(page_title="Bee-TFG Pro", page_icon="🐝", layout="wide")
 
 # ==========================================
-# ZONA 2: PREPARACIÓN DE VÍDEOS (BACKEND + FRONTEND)
+# 2. FUNCIONES AUXILIARES
 # ==========================================
+entorno = os.environ.copy()
+entorno["PYTHONIOENCODING"] = "utf-8"
+entorno["PYTHONUTF8"] = "1"
 
-# Guardamos la ruta de la carpeta donde están nuestros vídeos brutos.
-carpeta_videos = "data/raw"
-
-# Leemos la carpeta de Windows y sacamos una lista con los nombres de los vídeos que hay dentro.
-# Si la carpeta existe, saca la lista (`os.listdir`). Si no existe (para evitar errores), devuelve una lista vacía `[]`.
-videos_disponibles = os.listdir(carpeta_videos) if os.path.exists(carpeta_videos) else []
-
-# Desplegable en la pantalla principal que muestra los vídeos encontrados.
-video_elegido = st.selectbox("🎥 Selecciona el video a analizar:", videos_disponibles)
-
-# Creamos el botón gigante. Todo lo que esté indentado debajo de este 'if' SOLO ocurrirá al hacer clic.
-if st.button("¡Iniciar Análisis Avanzado!"):
+def ejecutar_script_en_vivo(comando, descripcion):
+    """Ejecuta un comando rápido y muestra la terminal en vivo."""
+    st.markdown(f"### ⚙️ Ejecutando: {descripcion}")
+    st.caption("💡 *Nota: Para detener este proceso en vivo, pulsa el botón 'Stop' arriba a la derecha en Streamlit.*")
+    caja_terminal = st.empty()
+    log_texto = ""
     
-    # Comprobación de seguridad.
-    # Si el usuario pulsa el botón pero la carpeta de vídeos estaba vacía, evitamos que el programa explote.
-    if not video_elegido:
-        st.error("⚠️ No se ha encontrado ningún video. Pon uno en la carpeta data/raw.")
+    proceso = subprocess.Popen(
+        comando, 
+        stdout=subprocess.PIPE, 
+        stderr=subprocess.STDOUT, 
+        text=True, 
+        encoding="utf-8", 
+        errors="replace", 
+        env=entorno
+    )
+    
+    for linea in proceso.stdout:
+        log_texto += linea
+        lineas_visibles = "\n".join(log_texto.splitlines()[-25:])
+        caja_terminal.code(lineas_visibles, language="bash")
+        
+    proceso.wait() 
+    if proceso.returncode == 0:
+        st.success(f"✅ {descripcion} completado con éxito.")
     else:
-        
-        # ==========================================
-        # ZONA 3: EL MOTOR DEL PROGRAMA (BACKEND)
-        # ==========================================
+        # Si el usuario lo para a la fuerza o falla
+        st.error(f"❌ Proceso interrumpido o fallido: {descripcion}.")
 
-        # Unimos el nombre de la carpeta y el del vídeo (ej: "data/raw" + "video.mp4" = "data/raw/video.mp4")
-        ruta_video = os.path.join(carpeta_videos, video_elegido)
-        
-        # --- CORRECCIÓN DE SEGURIDAD (Ruta absoluta para que OpenCV encuentre el vídeo siempre) ---
-        ruta_absoluta = os.path.abspath(ruta_video)
-        
-        # Cargamos la red neuronal en la memoria del ordenador.
-        modelo = YOLO(modelo_elegido)
-        
-        # Le decimos a OpenCV que abra el archivo de vídeo usando la ruta absoluta.
-        video = cv2.VideoCapture(ruta_absoluta)
-        
-        # Definimos dónde y cómo se va a guardar el vídeo con los recuadros dibujados.
-        ruta_salida = "runs/detect/video_procesado.mp4"
-        
-        # Extraemos las medidas exactas (ancho, alto y fotogramas por segundo) del vídeo original.
-        # La grabadora necesita saber de qué tamaño debe crear el vídeo nuevo para que no se deforme.
-        ancho = int(video.get(cv2.CAP_PROP_FRAME_WIDTH)) #Casteamos a int porque get devuelve un floa
-        alto = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = int(video.get(cv2.CAP_PROP_FPS))
-        
-        # Configuramos el codificador de vídeo (el formato) y encendemos la "grabadora" (VideoWriter).
-        codec = cv2.VideoWriter_fourcc(*'mp4v')
-        salida = cv2.VideoWriter(ruta_salida, codec, fps, (ancho, alto))
-        
-        # Preparamos un espacio en blanco en la web donde luego meteremos el vídeo.
-        marco_video = st.empty()
-        st.info("Procesando video con ajustes avanzados...")
+def lanzar_en_segundo_plano(comando, ruta_log):
+    """Inicia un script pesado en segundo plano."""
+    os.makedirs(os.path.dirname(ruta_log), exist_ok=True)
+    archivo = open(ruta_log, "w", encoding="utf-8", errors="replace")
+    subprocess.Popen(
+        comando, 
+        stdout=archivo, 
+        stderr=subprocess.STDOUT, 
+        text=True, 
+        encoding="utf-8", 
+        errors="replace", 
+        env=entorno
+    )
 
-        
-        # Creamos un "conjunto" matemático vacío para llevar la cuenta.
-        # Un 'set' ignora automáticamente los números repetidos. Perfecto para contar DNI únicos de abejas.
-        abejas_unicas = set()
-        
-        # Bucle infinito. Se repetirá una vez por cada fotograma del vídeo.
-        while True:
-            # Leemos un fotograma. 'exito' nos dirá True si hay foto, o False si el vídeo se acabó.
-            exito, fotograma = video.read()
-            
-            # Si el vídeo se ha terminado...
-            if not exito:
-                # Mostramos el mensaje final de éxito en la web y rompemos (break) el bucle infinito.
-                st.success(f"¡Análisis completado! Se han detectado {len(abejas_unicas)} abejas únicas en total.")
-                break # <--- Asegurado que este break rompa el bucle
-            
-            # Pasamos la foto y los parámetros que el usuario eligió en la web a YOLO.
-            # persist=True es vital para que el Tracker no olvide a las abejas del fotograma anterior.
-            resultados = modelo.track(
-                fotograma, 
-                conf=confianza, 
-                iou=iou_valor,       
-                imgsz=tamano_img,    
-                tracker=tracker_elegido, 
-                persist=True
-            )
-            
-            # Le pedimos a YOLO que nos devuelva la foto, pero ya con los recuadros y números pintados encima.
-            fotograma_dibujado = resultados[0].plot()
-            
-            # Comprobamos si la IA ha detectado al menos una abeja y le ha puesto DNI (id).
-            # Si no hay abejas en este fotograma y no hiciéramos esta comprobación, el código daría error.
-            if resultados[0].boxes.id is not None:
-                # Extraemos los IDs de la IA, los convertimos a números normales (int) de Python.
-                ids_detectados = resultados[0].boxes.id.cpu().numpy().astype(int)
-                # Metemos esos números en nuestro conjunto matemático (él solo descartará los repetidos).
-                abejas_unicas.update(ids_detectados)
-            
-            # Preparamos el texto del contador (ej: "Abejas Totales: 15").
-            texto_contador = f"Abejas Totales: {len(abejas_unicas)}"
-            # Usamos OpenCV para escribir ese texto en verde neón en la esquina de la foto.
-            cv2.putText(fotograma_dibujado, texto_contador, (30, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
-            
-            # Guardamos esta foto pintada dentro del archivo MP4 final en el disco duro.
-            salida.write(fotograma_dibujado)
-            
-            # Convertimos los colores de la foto de formato BGR (que usa OpenCV) a RGB (que usa internet).
-            fotograma_rgb = cv2.cvtColor(fotograma_dibujado, cv2.COLOR_BGR2RGB)
-            # Mostramos la foto a todo color dentro del marco en blanco que creamos en nuestra web.
-            marco_video.image(fotograma_rgb, channels="RGB")
-            
-        # ==========================================
-        # ZONA 4: LIMPIEZA Y DESCARGA (CIERRE)
-        # ==========================================
+def leer_log_en_vivo(ruta_log):
+    """Lee las últimas líneas del archivo log."""
+    if os.path.exists(ruta_log):
+        with open(ruta_log, "r", encoding="utf-8", errors="replace") as f:
+            lineas = f.readlines()
+            return "".join(lineas[-40:])
+    return "El archivo log aún no se ha creado o está vacío."
 
-        # Apagamos el lector de vídeo original y cerramos la "grabadora".
-        # Si no lo cerramos, el archivo MP4 se quedará corrupto y no se podrá reproducir.
-        video.release()
-        salida.release()
-        
-        # Abrimos el vídeo procesado que acabamos de guardar en modo "lectura binaria" ('rb').
-        with open(ruta_salida, "rb") as archivo_video:
-            # Invocamos el botón mágico de Streamlit que permite al usuario bajarse ese archivo.
-            st.download_button(
-                label="⬇️ Descargar Video Procesado",
-                data=archivo_video,
-                file_name=f"procesado_{video_elegido}",
-                mime="video/mp4"
-            )
-            
-            
+def detener_proceso_windows(nombre_script):
+    """Busca un script de Python ejecutándose en Windows y lo mata a la fuerza."""
+    # Comando de Windows (WMIC) para matar procesos por el nombre de su argumento
+    comando_kill = f'wmic process where "commandline like \'%{nombre_script}%\' and name=\'python.exe\'" delete >nul 2>&1'
+    os.system(comando_kill)
 
-"""DUDAS RESUELTAS"""
+# ==========================================
+# 3. INTERFAZ WEB (MENÚ LATERAL)
+# ==========================================
 
-"""
-* ids_detectados = resultados[0].boxes.id.cpu().numpy().astype(int)
-Utilizo esta cadena de métodos para extraer los tensores matemáticos de la GPU, convertirlos a matrices estándar de Python y asegurar que los identificadores sean números enteros y no decimales".
+st.sidebar.title("🐝 Menú de Navegación")
+st.sidebar.write("Selecciona el módulo:")
+
+opcion = st.sidebar.radio(
+    "Pipeline TFG:",
+    [
+        "📁 1. Preparar Dataset",
+        "🚀 2. Entrenar Modelo (YOLO)",
+        "🏃‍♂️ 3. Benchmark Trackers",
+        "📊 4. Evaluar Trackers (MOT)",
+        "✨ 5. Pre-Anotación Mágica"
+    ]
+)
+
+st.sidebar.divider()
+
+# BOTÓN GLOBAL DE EMERGENCIA EN LA BARRA LATERAL
+st.sidebar.subheader("🚨 Control de Emergencia")
+if st.sidebar.button("🛑 Detener TODOS los procesos", type="primary"):
+    scripts_a_matar = ["1_prepare_data.py", "2_train.py", "3_benchmark_trackers.py", "4_evaluate_tracking.py", "0_pre_annotate.py"]
+    for script in scripts_a_matar:
+        detener_proceso_windows(script)
+    st.sidebar.success("Procesos detenidos a la fuerza.")
 
 
+# --- PANTALLA PRINCIPAL ---
+st.title("🎛️ Panel de Control del Sistema")
+st.divider()
 
-* fotograma_rgb = cv2.cvtColor(fotograma_dibujado, cv2.COLOR_BGR2RGB)
-CV2 trabaja con GBR y las paginas web de hoy en dia con RGB
+if opcion == "📁 1. Preparar Dataset":
+    st.header("1. Preparación de Datos")
+    st.write("Unifica tus fotos, previene la fuga de datos y formatea todo al estándar YOLOv8.")
+    st.write("<br>", unsafe_allow_html=True)
+    
+    if st.button("▶️ Ejecutar Formateo de Dataset", use_container_width=True, type="primary"):
+        comando = [sys.executable, "scripts/1_prepare_data.py", "--input", "datasets/raw/mendeley_dataset/detection", "--output", "datasets/ready_for_yolo/mendeley_yolo"]
+        ejecutar_script_en_vivo(comando, "Preparación de Datos")
 
+elif opcion == "🚀 2. Entrenar Modelo (YOLO)":
+    st.header("2. Entrenamiento en Segundo Plano")
+    st.write("Proceso de alto coste computacional. Se lanzará de forma asíncrona.")
+    ruta_log_entrenamiento = "runs/entrenamiento_actual.log"
+    st.write("<br>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        if st.button("🔥 Iniciar Entrenamiento", type="primary", use_container_width=True):
+            comando_train = [sys.executable, "scripts/2_train.py", "--data", "datasets/ready_for_yolo/mendeley_yolo/data.yaml", "--epochs", "150"]
+            lanzar_en_segundo_plano(comando_train, ruta_log_entrenamiento)
+            st.success("¡Entrenamiento iniciado en el servidor!")
+            
+    with col2:
+        if st.button("🔄 Actualizar", use_container_width=True):
+            pass 
+            
+    with col3:
+        # BOTÓN ESPECÍFICO PARA MATAR EL ENTRENAMIENTO
+        if st.button("🛑 Detener", use_container_width=True):
+            detener_proceso_windows("2_train.py")
+            with open(ruta_log_entrenamiento, "a", encoding="utf-8") as f:
+                f.write("\n\n[!] ENTRENAMIENTO ABORTADO POR EL USUARIO.\n")
+            st.warning("Entrenamiento cancelado.")
+            
+    st.subheader("Terminal en vivo:")
+    progreso = leer_log_en_vivo(ruta_log_entrenamiento)
+    st.code(progreso, language="bash")
 
-* with open(ruta_salida, "rb") as archivo_video:
-Al poner "rb" (Read Binary), le estamos diciendo a Python: "Oye, no intentes entender ni leer palabras en este archivo. Simplemente coge el bloque de unos y ceros tal y como está, y entrégaselo a Streamlit para que el usuario pueda descargarlo en su ordenador". Si usaras solo "r", Python daría un error fatal al intentar decodificar el vídeo como si fuera un libro
-"""
+elif opcion == "🏃‍♂️ 3. Benchmark Trackers":
+    st.header("3. Inferencia y Tracking (Benchmark)")
+    st.write("Procesa los vídeos de prueba utilizando tu modelo YOLO y algoritmos del estado del arte.")
+    st.write("<br>", unsafe_allow_html=True)
+    
+    if st.button("▶️ Ejecutar Motores de Seguimiento", use_container_width=True, type="primary"):
+        comando = [sys.executable, "scripts/3_benchmark_trackers.py", "--model", "model/best_bee_medium.pt", "--input", "datasets/raw/BEE24/test", "--output", "runs/benchmark_results"]
+        ejecutar_script_en_vivo(comando, "Benchmark de Trackers MOT")
+
+elif opcion == "📊 4. Evaluar Trackers (MOT)":
+    st.header("4. Evaluación Matemática")
+    st.write("Cruza las cajas generadas con el Ground Truth para obtener métricas científicas.")
+    st.write("<br>", unsafe_allow_html=True)
+    
+    if st.button("▶️ Ejecutar Evaluación Matemática", use_container_width=True, type="primary"):
+        comando = [sys.executable, "scripts/4_evaluate_tracking.py", "--gt", "datasets/raw/BEE24/test", "--benchmark_dir", "runs/benchmark_results"]
+        ejecutar_script_en_vivo(comando, "Evaluador MOT")
+
+elif opcion == "✨ 5. Pre-Anotación Mágica":
+    st.header("🪄 Herramienta de Pre-Anotación")
+    st.write("Automatiza el etiquetado de vídeos crudos (Frame Skipping y pseudo-etiquetado).")
+    st.write("<br>", unsafe_allow_html=True)
+    
+    video_subido = st.text_input("Ruta del vídeo a pre-anotar:", value="data/raw/mi_video.mp4")
+
+    if st.button("✨ Iniciar Auto-Etiquetado", type="primary", use_container_width=True):
+        comando = [sys.executable, "scripts/0_pre_annotate.py", "--video", video_subido]
+        ejecutar_script_en_vivo(comando, f"Procesando {video_subido}...")

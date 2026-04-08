@@ -17,32 +17,11 @@ La idea general del TFG abarca las siguientes fases:
 
 ---
 
-## 🚀 Estado Actual: Fase 1 Completada (Prototipo Interactivo)
-
-Actualmente, el proyecto cuenta con un **pipeline end-to-end validado** mediante una aplicación web interactiva. En lugar de usar únicamente scripts por consola, se ha desarrollado una interfaz gráfica que permite procesar vídeos en tiempo real.
-
-### Hitos logrados:
-* **Entrenamiento del Modelo:** Se ha entrenado un modelo base (`yolo26n.pt`) durante 50 épocas en la nube (Google Colab) utilizando un dataset público de imágenes de abejas, obteniendo los pesos finales (`best_bee.pt`).
-* **Desarrollo del Frontend:** Creación de un panel de control local utilizando **Streamlit**.
-* **Integración del Tracker:** Implementación de persistencia temporal acoplando algoritmos MOT (BoT-SORT y ByteTrack) al motor de inferencia.
-* **Conteo de Individuos Únicos:** Implementación de lógica matemática mediante conjuntos (`sets`) para almacenar los IDs temporales y contabilizar el número total de abejas únicas que aparecen en el vídeo, evitando el conteo redundante.
-
-### 🛠️ Características del Panel de Control (App)
-La interfaz actual permite al investigador modificar hiperparámetros en caliente:
-- Selección del modelo de IA (`.pt`).
-- Ajuste de **Confianza mínima (conf)** y **Solapamiento máximo (IoU)**.
-- Selección de la resolución de análisis (`imgsz`).
-- Intercambio en tiempo real entre algoritmos de rastreo (`botsort.yaml` vs `bytetrack.yaml`).
-- Visualización en directo del procesado fotograma a fotograma (OpenCV).
-- Exportación y descarga directa del vídeo resultante en formato `.mp4`.
-
----
-
 ## 📂 Estructura del Repositorio
 
 La arquitectura del proyecto sigue el estándar *Cookiecutter Data Science* para garantizar la reproducibilidad y el aislamiento de responsabilidades:
 
-``` text
+```text
 bee-tfg/
 ├─ data/
 │  ├─ raw/            # Vídeos originales (sin modificar) de la cámara / datasets
@@ -50,13 +29,13 @@ bee-tfg/
 │  ├─ annotations/    # Etiquetas/GT (YOLO/COCO/MOT) exportadas desde CVAT/Label Studio
 │  └─ images/         # Imagenes para validar
 │─ datasets/
-│  ├─ raw/                     <-- [Almacén de lectura] Datos originales descargados
-│  │  ├─ mendeley/             <-- Tus secuencias originales (seq1, seq2...)
-│  │  ├─ bee24/                <-- El dataset científico de validación
-│  │  └─ bee2/                 <-- El otro dataset científico
+│  ├─ raw/                    <-- [Almacén de lectura] Datos originales descargados
+│  │  ├─ mendeley/            <-- Secuencias originales (seq1, seq2...)
+│  │  ├─ bee24/               <-- Dataset científico de validación
+│  │  └─ bee2/                <-- Otro dataset científico
 │  │
-│  └─ ready_for_yolo/          <-- [Almacén de escritura] Datasets limpios generados por ti
-│     └─ mendeley_yolo/        <-- ¡AQUÍ irá el resultado del script prepare_data.py!
+│  └─ ready_for_yolo/         <-- [Almacén de escritura] Datasets limpios generados
+│     └─ mendeley_yolo/       <-- Resultado del script prepare_data.py
 │        ├─ train/             
 │        ├─ val/               
 │        ├─ test/              
@@ -72,9 +51,21 @@ bee-tfg/
 └─ requirements.txt   # Dependencias del proyecto
 ```
 
-## 💻 Instalación y Uso local
+---
 
-Para reproducir este entorno en tu máquina local, sigue estos pasos:
+## 📹 Dataset y Vídeos de Prueba
+
+Debido a las restricciones de tamaño de GitHub, los vídeos originales utilizados para las pruebas de este prototipo no están incluidos directamente en el repositorio. Puedes descargar los vídeos de prueba desde el siguiente enlace:
+
+🔗 **[Descargar Dataset de Prueba (Google Drive)](https://drive.google.com/drive/folders/1UhLhz-O8WHCxz9ILM2cIvV89JZWFl5_a?usp=sharing)**
+
+Una vez descargados, colócalos dentro de la carpeta `data/raw/` de tu proyecto local para que la aplicación web y los scripts puedan detectarlos.
+
+---
+
+## 💻 Instalación Local
+
+Para reproducir este entorno en tu máquina local o servidor, sigue estos pasos:
 
 **1. Clona el repositorio:**
 ```bash
@@ -85,8 +76,10 @@ cd bee-tfg
 **2. Crea y activa un entorno virtual:**
 ```bash
 python -m venv .venv
+
 # En Windows:
 .venv\Scripts\activate
+
 # En Linux/Mac:
 source .venv/bin/activate
 ```
@@ -96,54 +89,44 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-**4. Introduce los videos y el modelo dentro de sus respectivas carpetas**
-*(Asegúrate de colocar al menos un vídeo de prueba en la carpeta `data/raw/` y tu modelo entrenado en `model/`).*
+---
 
+## 🚀 Uso A: Flujo de Ejecución Core (Pipeline de Scripts)
 
-**5. Inicia la aplicación:**
+El sistema de modelado está modularizado en 4 scripts puros de Python diseñados para ejecutarse de forma secuencial, ideal para servidores y máquinas compartidas de la Universidad.
+
+### Fase 1: Preparación del Dataset
+Extrae los datos crudos, previene la fuga de datos (*Data Leakage*) separando por secuencias de vídeo, genera anotaciones de fondo (*Negative Samples*) y construye la estructura estándar y el manifiesto `.yaml`.
+```bash
+python scripts/1_prepare_data.py --input datasets/raw/tu_dataset --output datasets/ready_for_yolo/dataset_formateado
+```
+
+### Fase 2: Entrenamiento del Modelo (YOLO)
+Aplica *Transfer Learning* sobre el detector base. Incluye configuración automática de hardware (GPU/CPU), *Early Stopping* y técnicas de *Data Augmentation* específicas para grabaciones cenitales (rotación 180º, Mosaic, Mixup).
+```bash
+python scripts/2_train.py --data datasets/ready_for_yolo/dataset_formateado/data.yaml --epochs 150 --batch 8
+```
+
+### Fase 3: Inferencia y Benchmark de Trackers
+Conecta el detector YOLO con 5 algoritmos de seguimiento del estado del arte (ByteTrack, BoT-SORT, OC-SORT, DeepOCSORT, StrongSORT). El código es agnóstico: acepta tanto carpetas de imágenes estandarizadas como vídeos `.mp4`.
+```bash
+python scripts/3_benchmark_trackers.py --model model/best_bee_medium.pt --input datasets/raw/dataset_test/test --output runs/benchmark_results
+```
+
+### Fase 4: Evaluación de Métricas (MOT Challenge)
+Audita los archivos de trayectorias generados aplicando el estándar científico MOT16 con un umbral estricto de IoU (50%). Genera una tabla comparativa automática de rendimiento (MOTA, IDF1, FP, FN, etc.) lista para la memoria del proyecto.
+```bash
+python scripts/4_evaluate_tracking.py --gt datasets/raw/dataset_test/test --benchmark_dir runs/benchmark_results
+```
+
+---
+
+## 🌐 Uso B: Interfaz de Usuario Web (Streamlit)
+
+Si deseas utilizar la interfaz visual interactiva para cargar vídeos y probar el modelo entrenado de forma amigable:
+
+Asegúrate de colocar al menos un vídeo de prueba en la carpeta `data/raw/` y tu modelo entrenado en la carpeta `model/`, y ejecuta:
+
 ```bash
 streamlit run app.py
 ```
-
-
-## 📹 Dataset y Vídeos de Prueba
-Debido a las restricciones de tamaño de GitHub, los vídeos originales utilizados para las pruebas de este prototipo no están incluidos directamente en el repositorio.
-
-Puedes descargar los vídeos de prueba desde el siguiente enlace:
-
-https://drive.google.com/drive/folders/1UhLhz-O8WHCxz9ILM2cIvV89JZWFl5_a?usp=sharing
-
-Una vez descargados, colócalos dentro de la carpeta data/raw/ de tu proyecto local para que la aplicación web pueda detectarlos.
-
-
-## 🛤️ Siguientes Pasos (Fase 2)
-
-- Obtener vídeos reales de la piquera de la colmena objetivo.
-- Anotar manualmente un subconjunto de los vídeos reales para hacer *Fine-tuning* del modelo actual.
-- Implementar la Lógica de Cruce de Línea en `app.py`: Trazar una línea virtual en la pantalla y calcular vectores de movimiento de los IDs para diferenciar qué abejas entran y cuáles salen.
-- Extracción de métricas de rendimiento y redacción de la memoria del TFG.
-
-
-## 🚀 Fase 2 Seguimiento Avanzado (Multi-Object Tracking - MOT)
-
-Para dotar al Trabajo de Fin de Grado (TFG) del máximo rigor científico, se ha trascendido el uso de los rastreadores integrados por defecto en YOLO (que limitaban la comparativa) y se ha implementado la librería de investigación académica **BoxMOT**. Esto ha permitido realizar un *benchmark* (evaluación comparativa) enfrentando a 5 de los algoritmos de seguimiento multiobjeto más punteros del estado del arte.
-
-
-### 🎯 Los 5 Algoritmos Evaluados (El "Big 5")
-
-1. **ByteTrack**: Algoritmo puramente cinemático/geométrico. Destaca por su alta velocidad, ya que asocia objetos basándose exclusivamente en el solapamiento de las cajas delimitadoras (IoU) sin requerir redes neuronales secundarias complejas.
-2. **BoT-SORT**: Mejora los algoritmos tradicionales añadiendo compensación del movimiento de la cámara y un mejor manejo del estado de los objetos. En nuestras pruebas iniciales, ha demostrado ser el rastreador **más estable** para lidiar con las oclusiones masivas en la entrada de la colmena (piquera).
-3. **OC-SORT (Observation-Centric SORT)**: Diseñado específicamente para mantener el rastro de objetos que se ocultan temporalmente y que presentan movimientos caóticos o no lineales, características idóneas para el vuelo de los insectos.
-4. **StrongSORT**: Evolución avanzada que utiliza ReID (Re-Identificación) mediante una red neuronal secundaria (ej. *osnet*) para extraer características visuales de los objetos y diferenciarlos por su "textura".
-5. **DeepOCSORT**: La evolución de vanguardia del clásico DeepSORT, combinando la robustez geométrica de OC-SORT con la extracción de características profundas.
-   > **⚠️ Nota Técnica de Actualización (DeepSORT vs DeepOCSORT):** > Durante el desarrollo de la investigación, se constató que el algoritmo clásico `DeepSORT` ha quedado obsoleto y ha sido eliminado de las versiones recientes de librerías modernas de tracking (como `boxmot`), en parte debido a incompatibilidades con arquitecturas matemáticas modernas (NumPy 2.0). Por rigor académico, fue sustituido en la comparativa por su variante moderna y superior, **DeepOCSORT**.
-
-### 🧠 Descubrimiento Científico Clave (ReID vs Geometría)
-Las pruebas empíricas han revelado una conclusión vital para el estudio de insectos: **Los algoritmos basados en el reconocimiento de apariencia (ReID)**, como StrongSORT o DeepOCSORT, resultan contraproducentes para el rastreo de abejas. 
-
-Al ser estos insectos visualmente idénticos entre sí, la red neuronal secundaria (*feature extractor*) se confunde al intentar encontrar diferencias en sus texturas, lo que provoca constantes cambios de identificador (Fragmentación de IDs). Por el contrario, los **trackers puramente geométricos o cinemáticos** (BoT-SORT, ByteTrack, OC-SORT) ofrecen un rendimiento muy superior al guiarse únicamente por trayectorias espaciales.
-
-### 🛠️ Próximos Pasos
-* Integración del modelo entrenado de mayor profundidad (**YOLOv8 Medium**) para reducir los falsos negativos temporales (parpadeos de detección) que alimentan al Tracker.
-* Implementación de una interfaz gráfica avanzada en **Streamlit** para visualizar las métricas y los seguimientos en tiempo real.
-
