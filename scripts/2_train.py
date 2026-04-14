@@ -4,93 +4,140 @@ import shutil
 import torch
 from ultralytics import YOLO
 
-def train_model(data_yaml: str, weights: str, epochs: int, batch: int, imgsz: int, project: str, name: str) -> None:
+
+def train_model(
+    data_yaml: str,
+    weights: str,
+    epochs: int,
+    batch: int,
+    imgsz: int,
+    project_dest_dir: str,
+    experiment_name: str
+) -> None:
     """
-    Orquesta el entrenamiento del modelo detector YOLO.
-    Configura el hardware dinámicamente, aplica técnicas de aumento de datos espaciales 
-    específicas para biometría cenital, y extrae los pesos óptimos al finalizar.
+    Entrena un detector YOLO a partir de pesos preentrenados, selecciona
+    automáticamente el dispositivo de cómputo y extrae el mejor checkpoint.
     """
-    
-    # [ESTRATEGIA TÉCNICA 1]: Asignación Dinámica de Aceleración Hardware
-    # Permite la ejecución agnóstica del script (funciona en entorno local o en la nube)
-    # comprobando la disponibilidad de núcleos CUDA.
+
+    # Selección automática de GPU o CPU según disponibilidad.
     if torch.cuda.is_available():
-        dispositivo = 0  # YOLO utiliza '0' para mapear la primera GPU (ej. NVIDIA Tesla T4)
-        nombre_gpu = torch.cuda.get_device_name(0)
-        print(f"\n[🚀] Hardware de aceleración detectado. Entrenando en GPU: {nombre_gpu}")
+        target_device = 0
+        gpu_hardware_name = torch.cuda.get_device_name(0)
+        print(f"\n[🚀] Entrenando en GPU: {gpu_hardware_name}")
     else:
-        dispositivo = 'cpu'
+        target_device = "cpu"
         print("\n[🐢] No se detectó GPU compatible con CUDA. Ejecutando en CPU...")
 
     print(f"[*] Iniciando Transfer Learning desde los pesos base: {weights}")
-    
-    # Validación previa al entrenamiento
+
+    # Validación previa del manifiesto del dataset.
     if not os.path.exists(data_yaml):
-        print(f"[!] ERROR CRÍTICO: No se localiza el manifiesto {data_yaml}. Ejecute el pipeline de preparación primero.")
+        print(
+            f"[!] ERROR: No se localiza el manifiesto {data_yaml}. "
+            f"Ejecute primero el pipeline de preparación del dataset."
+        )
         return
 
-    # Inicialización de la arquitectura YOLO con los pesos pre-entrenados
-    model = YOLO(weights) 
+    # Carga del modelo base.
+    model = YOLO(weights)
 
-    # [ESTRATEGIA TÉCNICA 2]: Configuración Hiperparamétrica del Entrenamiento
-    results = model.train(
-        data=data_yaml,      # Manifiesto del dataset
-        epochs=epochs,       # Límite superior de épocas de entrenamiento
-        
-        # Early Stopping: Detiene la ejecución si el mAP50-95 no mejora en 25 épocas consecutivas.
-        # Mecanismo crucial para mitigar el sobreajuste (Overfitting).
-        patience=25,         
-        
-        imgsz=imgsz,         # Resolución de entrada (960px). Vital para la detección de objetos pequeños (Small Object Detection).
-        batch=batch,         # Tamaño del lote (Batch Size). Ajustable según VRAM disponible.
-        device=dispositivo,  
-        project=project,     
-        name=name,           
-        
-        # [ESTRATEGIA TÉCNICA 3]: Data Augmentation Específico para Biometría
-        # degrees=180.0: Fundamental para capturas cenitales (desde arriba) de la piquera, 
-        # ya que los insectos no tienen una orientación espacial predefinida ("arriba" o "abajo").
-        degrees=180.0,       
-        
-        # Mosaic & Mixup: Técnicas de composición espacial que fuerzan a la red a detectar 
-        # abejas en entornos de alta densidad espacial y oclusiones severas.
-        mosaic=1.0,          
-        mixup=0.2,           
-        
-        # Perturbaciones radiométricas para simular cambios de exposición solar
-        hsv_s=0.3,           
-        hsv_v=0.3,           
-        
-        plots=True,          # Genera automáticamente las curvas de Loss y Precisión/Recall
-        exist_ok=True        # Evita la detención del script si el directorio ya existe
+    # Entrenamiento del detector.
+    model.train(
+        data=data_yaml,
+        epochs=epochs,
+        patience=25,
+        imgsz=imgsz,
+        batch=batch,
+        device=target_device,
+        project=project_dest_dir,
+        name=experiment_name,
+
+        # Aumentos de datos orientados a la detección de abejas en vista cenital.
+        degrees=180.0,
+        mosaic=1.0,
+        mixup=0.2,
+        hsv_s=0.3,
+        hsv_v=0.3,
+
+        plots=True,
+        exist_ok=True
     )
-    
-    # [ESTRATEGIA TÉCNICA 4]: Extracción Automática de Pesos Óptimos
-    # El framework almacena múltiples checkpoints. Este bloque aísla exclusivamente 
-    # el archivo 'best.pt' (modelo con menor función de pérdida en el conjunto de validación)
-    # y lo sitúa en la raíz del proyecto para facilitar la inferencia posterior.
-    best_model_path = os.path.join(project, name, "weights", "best.pt")
-    final_dest = os.path.join("model", f"best_{name}.pt")
-    
-    os.makedirs("model", exist_ok=True) 
-    
-    if os.path.exists(best_model_path):
-        shutil.copy(best_model_path, final_dest)
-        print(f"\n[+] Pipeline finalizado. Mejores pesos extraídos en: {final_dest}")
+
+    # Extracción automática del mejor modelo generado.
+    best_weights_source_path = os.path.join(project_dest_dir, experiment_name, "weights", "best.pt")
+    best_weights_dest_path = os.path.join("model", f"best_{experiment_name}.pt")
+
+    os.makedirs("model", exist_ok=True)
+
+    if os.path.exists(best_weights_source_path):
+        shutil.copy(best_weights_source_path, best_weights_dest_path)
+        print(f"\n[+] Mejores pesos extraídos en: {best_weights_dest_path}")
     else:
-        print("\n[!] Advertencia: El entrenamiento concluyó, pero no se generó el checkpoint best.pt.")
+        print("\n[!] Advertencia: El entrenamiento terminó, pero no se generó best.pt.")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Pipeline de Entrenamiento YOLO - Detección de Apis Mellifera")
-    
-    parser.add_argument("--data", type=str, default="datasets/ready_for_yolo/mendeley_yolo/data.yaml")
-    parser.add_argument("--weights", type=str, default="yolo26m.pt", help="Pesos base para Transfer Learning") 
-    parser.add_argument("--epochs", type=int, default=150, help="Iteraciones máximas")
-    parser.add_argument("--batch", type=int, default=8, help="Imágenes por iteración (reducir si hay error OOM)")
-    parser.add_argument("--imgsz", type=int, default=960, help="Dimensión tensorial de entrada")
-    parser.add_argument("--project", type=str, default="runs/train", help="Directorio de logs/métricas")
-    parser.add_argument("--name", type=str, default="bee_model", help="Nomenclatura del experimento")
-    
+    parser = argparse.ArgumentParser(
+        description="Pipeline de Entrenamiento YOLO - Detección de Apis Mellifera"
+    )
+
+    parser.add_argument(
+        "--data",
+        type=str,
+        default="datasets/ready_for_yolo/mendeley_yolo/data.yaml",
+        help="Ruta al archivo data.yaml"
+    )
+
+    parser.add_argument(
+        "--weights",
+        type=str,
+        default="yolo26m.pt",
+        help="Pesos base para Transfer Learning"
+    )
+
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=150,
+        help="Número máximo de épocas"
+    )
+
+    parser.add_argument(
+        "--batch",
+        type=int,
+        default=8,
+        help="Tamaño del batch"
+    )
+
+    parser.add_argument(
+        "--imgsz",
+        type=int,
+        default=960,
+        help="Resolución de entrada"
+    )
+
+    parser.add_argument(
+        "--project",
+        type=str,
+        default="runs/train",
+        help="Directorio de métricas y checkpoints"
+    )
+
+    parser.add_argument(
+        "--name",
+        type=str,
+        default="bee_model",
+        help="Nombre del experimento"
+    )
+
     args = parser.parse_args()
-    
-    train_model(args.data, args.weights, args.epochs, args.batch, args.imgsz, args.project, args.name)
+
+    train_model(
+        data_yaml=args.data,
+        weights=args.weights,
+        epochs=args.epochs,
+        batch=args.batch,
+        imgsz=args.imgsz,
+        project_dest_dir=args.project, 
+        experiment_name=args.name      
+    )

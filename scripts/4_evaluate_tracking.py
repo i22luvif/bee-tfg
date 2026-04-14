@@ -3,148 +3,175 @@ import numpy as np
 import pandas as pd
 import argparse
 
-# =====================================================================
-# [ESTRATEGIA TÉCNICA 1]: Resolución de Dependencias Dinámica (Monkey Patching)
-# =====================================================================
-# La librería estándar 'motmetrics' depende de una función (np.asfarray) 
-# deprecada en Numpy 2.0+. Para garantizar la reproducibilidad del TFG en 
-# infraestructuras modernas (nube, contenedores) sin forzar un 'downgrade' 
-# de librerías core, inyectamos el método faltante directamente en el espacio 
-# de nombres de Numpy en tiempo de ejecución.
+# Compatibilidad con motmetrics en entornos con NumPy 2.0+
 if not hasattr(np, 'asfarray'):
     np.asfarray = lambda a: np.asarray(a, dtype=float)
 
 import motmetrics as mm
 
-def evaluar_tracker_individual(ruta_dataset_gt: str, ruta_resultados_tracker: str) -> pd.DataFrame:
+
+def evaluar_tracker_individual(gt_source_dir: str, tracker_hypotheses_dir: str) -> pd.DataFrame:
     """
-    Evalúa cuantitativamente las predicciones de trayectorias de un algoritmo 
-    específico contra las anotaciones manuales (Ground Truth).
+    Evalúa las trayectorias de un tracker frente al Ground Truth y devuelve
+    una tabla con métricas por secuencia y una fila agregada global.
     """
-    mh = mm.metrics.create()
-    acumuladores = []
-    nombres_secuencias = []
-    
-    if not os.path.exists(ruta_dataset_gt):
-        print(f"[!] ERROR CRÍTICO: Directorio Ground Truth inaccesible: {ruta_dataset_gt}")
+    metrics_host = mm.metrics.create()
+    metric_accumulators = []
+    sequence_names = []
+
+    if not os.path.exists(gt_source_dir):
+        print(f"[!] ERROR CRÍTICO: Directorio Ground Truth inaccesible: {gt_source_dir}")
         return None
 
-    # Extracción de secuencias válidas del dataset de validación/test
-    secuencias = sorted([d for d in os.listdir(ruta_dataset_gt) if os.path.isdir(os.path.join(ruta_dataset_gt, d))])
-    
-    for seq in secuencias:
-        ruta_gt = os.path.join(ruta_dataset_gt, seq, "gt", "gt.txt")
-        ruta_hyp = os.path.join(ruta_resultados_tracker, f"{seq}.txt")
-        
-        if not os.path.exists(ruta_gt):
+    valid_sequences = sorted([
+        d for d in os.listdir(gt_source_dir)
+        if os.path.isdir(os.path.join(gt_source_dir, d))
+    ])
+
+    for sequence_name in valid_sequences:
+        gt_file_path = os.path.join(gt_source_dir, sequence_name, "gt", "gt.txt")
+        hypothesis_file_path = os.path.join(tracker_hypotheses_dir, f"{sequence_name}.txt")
+
+        if not os.path.exists(gt_file_path):
             continue
-            
-        # Tolerancia a Fallos: Omite secuencias donde el inferenciador colapsó, 
-        # permitiendo evaluar el rendimiento sobre el resto del dataset.
-        if not os.path.exists(ruta_hyp):
-            print(f"[!] Advertencia: Ausencia de hipótesis predictivas para {seq} en {ruta_resultados_tracker}")
+
+        # Si falta la salida del tracker para una secuencia, se omite.
+        if not os.path.exists(hypothesis_file_path):
+            print(f"[!] Advertencia: Ausencia de hipótesis para {sequence_name} en {tracker_hypotheses_dir}")
             continue
-            
-        # Parseo de tensores bajo el estándar MOT15/16
-        gt = mm.io.loadtxt(ruta_gt, fmt='mot15-2D', min_confidence=1)
-        hyp = mm.io.loadtxt(ruta_hyp, fmt='mot15-2D')
-        
-        # [ESTRATEGIA TÉCNICA 2]: Métrica de Asignación Espacial (IoU Thresholding)
-        # Se define un umbral de solapamiento del 50% (distth=0.5). La matriz de 
-        # costes de asociación penalizará cualquier predicción que no comparta 
-        # al menos la mitad de su área con la ubicación real de la abeja.
-        acc = mm.utils.compare_to_groundtruth(gt, hyp, 'iou', distth=0.5)
-        
-        acumuladores.append(acc)
-        nombres_secuencias.append(seq)
-        
-    if not acumuladores:
+
+        ground_truth_data = mm.io.loadtxt(gt_file_path, fmt='mot15-2D', min_confidence=1)
+        hypothesis_data = mm.io.loadtxt(hypothesis_file_path, fmt='mot15-2D')
+
+        # Asociación espacial basada en IoU con umbral del 50%.
+        sequence_accumulator = mm.utils.compare_to_groundtruth(
+            ground_truth_data,
+            hypothesis_data,
+            'iou',
+            distth=0.5
+        )
+
+        metric_accumulators.append(sequence_accumulator)
+        sequence_names.append(sequence_name)
+
+    if not metric_accumulators:
         return None
-        
-    # [ESTRATEGIA TÉCNICA 3]: Agregación Global de Métricas
-    # Calcula el rendimiento global ponderado ('OVERALL') de todo el dataset,
-    # vital para evitar sesgos en vídeos particularmente fáciles o difíciles.
-    resumen = mh.compute_many(
-        acumuladores, 
-        metrics=['idf1', 'mota', 'motp', 'num_false_positives', 'num_misses', 'num_switches', 'mostly_tracked', 'mostly_lost'], 
-        names=nombres_secuencias, 
-        generate_overall=True 
+
+    tracker_summary_df = metrics_host.compute_many(
+        metric_accumulators,
+        metrics=[
+            'idf1',
+            'mota',
+            'motp',
+            'num_false_positives',
+            'num_misses',
+            'num_switches',
+            'mostly_tracked',
+            'mostly_lost'
+        ],
+        names=sequence_names,
+        generate_overall=True
     )
-    return resumen
 
-def evaluar_benchmark_completo(ruta_dataset_gt: str, ruta_benchmark_root: str) -> None:
+    return tracker_summary_df
+
+
+def evaluar_benchmark_completo(gt_source_dir: str, benchmark_results_dir: str) -> None:
     """
-    Función Orquestadora: Analiza el directorio de inferencias, extrae las métricas
-    individuales de cada algoritmo participante y consolida los resultados en una
-    matriz de rendimiento comparativa.
+    Evalúa todos los trackers presentes en un benchmark y construye
+    una tabla comparativa final con sus métricas globales.
     """
-    print(f"[*] Inicializando auditoría de métricas MOT en: {ruta_benchmark_root}")
-    
-    if not os.path.exists(ruta_benchmark_root):
-        print(f"[!] ERROR: Directorio de inferencias no localizado: {ruta_benchmark_root}")
+    print(f"[*] Inicializando auditoría de métricas MOT en: {benchmark_results_dir}")
+
+    if not os.path.exists(benchmark_results_dir):
+        print(f"[!] ERROR: Directorio de inferencias no localizado: {benchmark_results_dir}")
         return
 
-    trackers = sorted([d for d in os.listdir(ruta_benchmark_root) if os.path.isdir(os.path.join(ruta_benchmark_root, d))])
-    
-    if not trackers:
+    tracker_algorithms = sorted([
+        d for d in os.listdir(benchmark_results_dir)
+        if os.path.isdir(os.path.join(benchmark_results_dir, d))
+    ])
+
+    if not tracker_algorithms:
         print("[!] No se detectaron algoritmos a evaluar.")
         return
 
-    resultados_globales = []
+    all_trackers_overall_metrics = []
 
-    for tracker_name in trackers:
+    for tracker_name in tracker_algorithms:
         print(f"\n📊 Procesando métricas para: {tracker_name.upper()}...")
-        ruta_resultados_tracker = os.path.join(ruta_benchmark_root, tracker_name)
-        
-        resumen_df = evaluar_tracker_individual(ruta_dataset_gt, ruta_resultados_tracker)
-        
-        if resumen_df is not None:
-            # Aislamiento de la fila agregada (OVERALL) para la comparativa macro
-            overall_metrics = resumen_df.loc['OVERALL'].copy()
-            overall_metrics['Tracker'] = tracker_name.upper()
-            resultados_globales.append(overall_metrics)
+        current_tracker_dir = os.path.join(benchmark_results_dir, tracker_name)
+
+        tracker_metrics_df = evaluar_tracker_individual(gt_source_dir, current_tracker_dir)
+
+        if tracker_metrics_df is not None:
+            tracker_overall_row = tracker_metrics_df.loc['OVERALL'].copy()
+            tracker_overall_row['Tracker'] = tracker_name.upper()
+            all_trackers_overall_metrics.append(tracker_overall_row)
         else:
             print(f"  [!] Fallo en el cómputo de métricas para {tracker_name}")
 
-    if not resultados_globales:
+    if not all_trackers_overall_metrics:
         print("Auditoría abortada: Ausencia de datos válidos.")
         return
 
-    # [ESTRATEGIA TÉCNICA 4]: Construcción del DataFrame Final y Estandarización
-    tabla_final = pd.DataFrame(resultados_globales)
-    
-    columnas = ['Tracker'] + [c for c in tabla_final.columns if c != 'Tracker']
-    tabla_final = tabla_final[columnas]
-    
-    tabla_final.rename(columns={
-        'idf1': 'IDF1', 'mota': 'MOTA', 'motp': 'MOTP',
-        'num_false_positives': 'FP', 
-        'num_misses': 'FN',           
-        'num_switches': 'IDsw',       
-        'mostly_tracked': 'MT',       
-        'mostly_lost': 'ML'           
+    final_comparison_df = pd.DataFrame(all_trackers_overall_metrics)
+
+    reordered_columns = ['Tracker'] + [c for c in final_comparison_df.columns if c != 'Tracker']
+    final_comparison_df = final_comparison_df[reordered_columns]
+
+    final_comparison_df.rename(columns={
+        'idf1': 'IDF1',
+        'mota': 'MOTA',
+        'motp': 'MOTP',
+        'num_false_positives': 'FP',
+        'num_misses': 'FN',
+        'num_switches': 'IDsw',
+        'mostly_tracked': 'MT',
+        'mostly_lost': 'ML'
     }, inplace=True)
 
-    print("\n" + "="*85)
+    print("\n" + "=" * 85)
     print("🏆 RESULTADOS FINALES DEL BENCHMARK (Métricas MOT)")
-    print("="*85)
-    
-    formatos = {'IDF1': '{:.1%}'.format, 'MOTA': '{:.1%}'.format, 'MOTP': '{:.3f}'.format}
-    print(tabla_final.to_string(index=False, formatters=formatos))
-    print("="*85)
-    
-    # Persistencia de la matriz en disco duro para análisis post-hoc
-    ruta_csv = os.path.join(ruta_benchmark_root, "resultados_finales_tfg.csv")
-    tabla_final.to_csv(ruta_csv, index=False)
-    print(f"\n✅ Matriz de resultados exportada con éxito a: {ruta_csv}")
+    print("=" * 85)
+
+    display_formatters = {
+        'IDF1': '{:.1%}'.format,
+        'MOTA': '{:.1%}'.format,
+        'MOTP': '{:.3f}'.format
+    }
+
+    print(final_comparison_df.to_string(index=False, formatters=display_formatters))
+    print("=" * 85)
+
+    final_csv_dest_path = os.path.join(benchmark_results_dir, "resultados_finales_tfg.csv")
+    final_comparison_df.to_csv(final_csv_dest_path, index=False)
+
+    print(f"\n✅ Matriz de resultados exportada con éxito a: {final_csv_dest_path}")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Auditor Masivo de Algoritmos MOT (Multiple Object Tracking)")
-    
-    parser.add_argument("--gt", type=str, default="datasets/raw/BEE24/test", 
-                        help="Directorio origen del Ground Truth (Anotaciones expertas)")
-    parser.add_argument("--benchmark_dir", type=str, default="runs/benchmark_results", 
-                        help="Directorio con las inferencias de los modelos a evaluar")
-    
+    parser = argparse.ArgumentParser(
+        description="Auditor Masivo de Algoritmos MOT (Multiple Object Tracking)"
+    )
+
+    parser.add_argument(
+        "--gt",
+        type=str,
+        default="datasets/raw/BEE24/test",
+        help="Directorio origen del Ground Truth"
+    )
+
+    parser.add_argument(
+        "--benchmark_dir",
+        type=str,
+        default="runs/benchmark_results",
+        help="Directorio con las inferencias a evaluar"
+    )
+
     args = parser.parse_args()
-    evaluar_benchmark_completo(args.gt, args.benchmark_dir)
+
+    evaluar_benchmark_completo(
+        gt_source_dir=args.gt,
+        benchmark_results_dir=args.benchmark_dir
+    )

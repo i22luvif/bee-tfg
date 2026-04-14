@@ -3,102 +3,176 @@ import argparse
 from pathlib import Path
 from ultralytics import YOLO
 
-def auto_annotate_video(video_path: str, model_path: str, output_dir: str, frame_skip: int, conf_thresh: float) -> None:
+
+def auto_annotate_video(
+    video_path: str,
+    model_path: str,
+    output_dir: str,
+    frame_skip: int,
+    conf_thresh: float
+) -> None:
     """
-    Motor de Auto-Etiquetado (Pseudo-Labeling).
-    Procesa un vídeo crudo, extrae fotogramas de forma espaciada (Frame Skipping) 
-    y utiliza un modelo YOLO base para generar anotaciones automáticas 
-    en formato de coordenadas espaciales normalizadas (YOLOv8 Format).
+    Motor de auto-etiquetado (pseudo-labeling) para vídeos.
+
+    Procedimiento:
+    1. Carga un vídeo de entrada.
+    2. Extrae fotogramas de forma espaciada mediante frame skipping.
+    3. Aplica un modelo YOLO sobre cada fotograma seleccionado.
+    4. Guarda:
+       - la imagen del fotograma,
+       - un archivo de etiquetas en formato YOLO estándar,
+       - y un archivo auxiliar con las mismas etiquetas más la confianza.
+
+    Parámetros:
+        video_path (str): ruta al vídeo de entrada.
+        model_path (str): ruta al modelo YOLO que se utilizará como asistente.
+        output_dir (str): directorio raíz donde se guardarán los resultados.
+        frame_skip (int): procesa 1 de cada N fotogramas.
+        conf_thresh (float): umbral mínimo de confianza de las detecciones.
     """
+
     print(f"[*] Cargando modelo asistente YOLO: {model_path}")
     model = YOLO(model_path)
-    
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+
+    # Apertura del vídeo de entrada.
+    video_capture = cv2.VideoCapture(video_path)
+    if not video_capture.isOpened():
         print(f"[!] ERROR: No se pudo leer el vídeo {video_path}")
         return
 
-    # [ESTRATEGIA TÉCNICA 1]: Creación de la Estructura Pura de YOLO
-    # Creamos las carpetas 'images' y 'labels' que programas como Roboflow o CVAT 
-    # exigen para poder importar el dataset sin errores.
-    out_images = Path(output_dir) / "images"
-    out_labels = Path(output_dir) / "labels"
-    out_images.mkdir(parents=True, exist_ok=True)
-    out_labels.mkdir(parents=True, exist_ok=True)
+    # Estructura de salida compatible con pipelines basados en YOLO.
+    images_dest_dir = Path(output_dir) / "images"
+    labels_dest_dir = Path(output_dir) / "labels"
+    confs_dest_dir = Path(output_dir) / "confidences"
 
-    vid_name = Path(video_path).stem
-    frame_idx = 0
-    saved_count = 0
+    images_dest_dir.mkdir(parents=True, exist_ok=True)
+    labels_dest_dir.mkdir(parents=True, exist_ok=True)
+    confs_dest_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[*] Procesando vídeo: {vid_name} | Extrayendo 1 de cada {frame_skip} fotogramas...")
+    # Nombre base del vídeo sin extensión.
+    video_base_name = Path(video_path).stem
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break # Fin del vídeo
+    frame_index = 0
+    saved_frames_count = 0
 
-        # [ESTRATEGIA TÉCNICA 2]: Muestreo Temporal (Frame Skipping)
-        # Solo procesamos el fotograma si cumple la condición del salto.
-        # Ej: Si frame_skip=15 en un vídeo a 30FPS, extrae 2 fotos por segundo.
-        if frame_idx % frame_skip == 0:
-            
-            # Inferencia: Usamos un umbral de confianza más bajo de lo normal (ej: 0.4).
-            # Es preferible que la IA ponga falsos positivos (fáciles de borrar a mano) 
-            # a que se deje abejas sin etiquetar (difíciles de dibujar de cero).
+    print(
+        f"[*] Procesando vídeo: {video_base_name} | "
+        f"Extrayendo 1 de cada {frame_skip} fotogramas..."
+    )
+
+    while video_capture.isOpened():
+        success, frame = video_capture.read()
+        if not success:
+            break  # Fin del vídeo
+
+        # Muestreo temporal: solo se procesa 1 de cada N fotogramas.
+        if frame_index % frame_skip == 0:
+
+            # Umbral de confianza bajo para priorizar cobertura en pseudo-labeling.
             results = model(frame, conf=conf_thresh, verbose=False)
 
-            # Nomenclatura única: NombreDelVideo_NumeroDeFrame.jpg
-            base_name = f"{vid_name}_{frame_idx:05d}"
-            img_path = out_images / f"{base_name}.jpg"
-            txt_path = out_labels / f"{base_name}.txt"
+            # Identificador único para la imagen y sus archivos asociados.
+            frame_base_name = f"{video_base_name}_{frame_index:05d}"
+            image_dest_path = images_dest_dir / f"{frame_base_name}.jpg"
+            label_dest_path = labels_dest_dir / f"{frame_base_name}.txt"
+            conf_dest_path = confs_dest_dir / f"{frame_base_name}.txt"
 
-            # 1. Guardamos la foto física
-            cv2.imwrite(str(img_path), frame)
+            # Exportación del fotograma.
+            cv2.imwrite(str(image_dest_path), frame)
 
-            # 2. Guardamos las anotaciones matemáticas
-            with open(txt_path, 'w') as f:
+            # Exportación de etiquetas estándar y etiquetas extendidas.
+            with open(label_dest_path, "w") as label_file, open(conf_dest_path, "w") as conf_file:
                 boxes = results[0].boxes
+
                 if len(boxes) > 0:
-                    # [ESTRATEGIA TÉCNICA 3]: Extracción de Coordenadas Normalizadas (xywhn)
-                    # Extraemos X_centro, Y_centro, Ancho y Alto en formato porcentual (0.0 a 1.0)
+                    # Coordenadas normalizadas en formato YOLO: x_center, y_center, width, height.
                     coords = boxes.xywhn.cpu().numpy()
                     classes = boxes.cls.cpu().numpy()
+                    confs = boxes.conf.cpu().numpy()
 
-                    for cls, coord in zip(classes, coords):
-                        # Formato YOLO oficial: Clase X_centro Y_centro Ancho Alto
-                        linea = f"{int(cls)} {coord[0]:.6f} {coord[1]:.6f} {coord[2]:.6f} {coord[3]:.6f}\n"
-                        f.write(linea)
-            
-            saved_count += 1
+                    for cls, coord, conf in zip(classes, coords, confs):
+                        # Formato YOLO estándar.
+                        linea_yolo = (
+                            f"{int(cls)} "
+                            f"{coord[0]:.6f} {coord[1]:.6f} "
+                            f"{coord[2]:.6f} {coord[3]:.6f}\n"
+                        )
+                        label_file.write(linea_yolo)
 
-        frame_idx += 1
+                        # Formato auxiliar: YOLO + confianza.
+                        linea_conf = (
+                            f"{int(cls)} "
+                            f"{coord[0]:.6f} {coord[1]:.6f} "
+                            f"{coord[2]:.6f} {coord[3]:.6f} "
+                            f"{conf:.4f}\n"
+                        )
+                        conf_file.write(linea_conf)
 
-    cap.release()
-    print("\n" + "="*60)
-    print(f"✅ PRE-ANOTACIÓN COMPLETADA CON ÉXITO")
-    print(f" 📁 Fotogramas y etiquetas exportados: {saved_count}")
+            saved_frames_count += 1
+
+        frame_index += 1
+
+    # Liberación del recurso de vídeo.
+    video_capture.release()
+
+    print("\n" + "=" * 60)
+    print("✅ PRE-ANOTACIÓN COMPLETADA CON ÉXITO")
+    print(f" 📁 Fotogramas y etiquetas exportados: {saved_frames_count}")
     print(f" 📍 Ruta destino: {output_dir}")
-    print("="*60)
-    print("💡 Siguiente paso: Sube esta carpeta a Roboflow/CVAT, revisa que las cajas ")
-    print("   estén bien ajustadas, corrige los fallos, y exporta tu Dataset Definitivo.")
+    print("=" * 60)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Script de Auto-Etiquetado YOLO para generación de Datasets")
-    
-    # El vídeo crudo que has grabado en la colmena
-    parser.add_argument("--video", type=str, required=True, help="Ruta al vídeo (.mp4, .avi) de entrada")
-    
-    # Tu modelo pre-entrenado actual
-    parser.add_argument("--model", type=str, default="model/best_bee_medium.pt", help="Ruta al modelo YOLO asistente")
-    
-    # Donde se guardarán las carpetas /images y /labels
-    parser.add_argument("--output", type=str, default="datasets/raw/mi_dataset_propio", help="Directorio de salida")
-    
-    # Salto de fotogramas: 15 significa que en un vídeo de 30fps, guarda 2 fotos por segundo.
-    parser.add_argument("--skip", type=int, default=15, help="Extraer 1 de cada 'X' fotogramas")
-    
-    # Confianza baja a propósito (0.4) para que anote el máximo de abejas posibles
-    parser.add_argument("--conf", type=float, default=0.4, help="Umbral de confianza de YOLO")
-    
+    parser = argparse.ArgumentParser(
+        description="Script de auto-etiquetado YOLO para generación de datasets"
+    )
+
+    # Vídeo de entrada.
+    parser.add_argument(
+        "--video",
+        type=str,
+        required=True,
+        help="Ruta al vídeo (.mp4, .avi) de entrada"
+    )
+
+    # Modelo YOLO asistente.
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="model/best_bee_medium.pt",
+        help="Ruta al modelo YOLO asistente"
+    )
+
+    # Directorio raíz de salida.
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="datasets/raw/mi_dataset_propio",
+        help="Directorio de salida"
+    )
+
+    # Frecuencia de muestreo temporal.
+    parser.add_argument(
+        "--skip",
+        type=int,
+        default=15,
+        help="Extraer 1 de cada 'X' fotogramas"
+    )
+
+    # Umbral mínimo de confianza.
+    parser.add_argument(
+        "--conf",
+        type=float,
+        default=0.4,
+        help="Umbral de confianza de YOLO"
+    )
+
     args = parser.parse_args()
-    auto_annotate_video(args.video, args.model, args.output, args.skip, args.conf)
+
+    auto_annotate_video(
+        args.video,
+        args.model,
+        args.output,
+        args.skip,
+        args.conf
+    )

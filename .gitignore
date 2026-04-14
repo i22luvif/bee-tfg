@@ -21,6 +21,7 @@ data/annotations/*
 runs/*
 datasets/*
 model/*
+notebooks/*
 
 # Mantener placeholders
 !data/raw/.gitkeep
@@ -30,3 +31,8 @@ model/*
 
 # Config local
 configs/*.local.*
+
+scripts/explicaciones/*
+scripts/mio/*
+scripts/runs/*
+scripts/scripts_con_comentarios/*

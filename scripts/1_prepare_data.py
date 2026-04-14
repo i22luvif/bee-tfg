@@ -2,118 +2,151 @@ import shutil
 import argparse
 from pathlib import Path
 
-def copy_file(src: Path, dst: Path):
+
+def copy_file(src: Path, dst: Path) -> None:
     """
-    Función auxiliar para la copia segura de archivos.
-    Crea la jerarquía de directorios necesaria y evita redundancias en re-ejecuciones.
+    Copia un archivo garantizando la existencia del directorio de destino
+    y evitando duplicados en re-ejecuciones del pipeline.
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Eficiencia: Solo realizamos la operación de I/O si el archivo no existe en destino
+
     if not dst.exists():
         shutil.copy2(src, dst)
 
-def process_split(split_name: str, split_seqs: list, det_root: Path, out_dir: Path):
-    """
-    Procesa un subconjunto de datos (train, val o test).
-    Realiza la extracción, el renombrado para evitar colisiones espaciales y 
-    gestiona la generación de muestras negativas para el entrenamiento.
-    """
-    img_out = out_dir / split_name / "images"
-    lbl_out = out_dir / split_name / "labels"
-    
-    IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-    n_img, n_lbl = 0, 0
 
-    for seq in split_seqs:
-        seq_dir = det_root / seq
-        imgs_dir = seq_dir / "images"
-        lbls_dir = seq_dir / "labels"
+def process_split(
+    split_name: str,
+    split_seqs: list[str],
+    input_dataset_path: Path,
+    output_dataset_path: Path
+) -> tuple[int, int]:
+    """
+    Procesa un subconjunto del dataset (train, val o test), copia imágenes
+    y etiquetas, renombra archivos para evitar colisiones y genera muestras
+    negativas cuando no existe anotación.
+    """
+    images_dest_dir = output_dataset_path / split_name / "images"
+    labels_dest_dir = output_dataset_path / split_name / "labels"
 
-        if not imgs_dir.exists():
+    valid_image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    image_count, label_count = 0, 0
+
+    for sequence_folder in split_seqs:
+        sequence_dir = input_dataset_path / sequence_folder
+        sequence_images_dir = sequence_dir / "images"
+        sequence_labels_dir = sequence_dir / "labels"
+
+        if not sequence_images_dir.exists():
             continue
 
-        for img in imgs_dir.iterdir():
-            if (not img.is_file()) or (img.suffix.lower() not in IMG_EXTS):
+        for image_file in sequence_images_dir.iterdir():
+            if (not image_file.is_file()) or (
+                image_file.suffix.lower() not in valid_image_extensions
+            ):
                 continue
 
-            # [ESTRATEGIA TÉCNICA 1]: Resolución de Colisiones de Nomenclatura
-            # Al unificar múltiples secuencias de vídeo en un único directorio ('train'),
-            # inyectamos el ID de la secuencia al nombre del frame para garantizar unicidad.
-            new_stem = f"{seq}__{img.stem}"
-            img_dst = img_out / f"{new_stem}{img.suffix.lower()}"
-            copy_file(img, img_dst)
-            n_img += 1
+            # Se añade el identificador de la secuencia para evitar
+            # colisiones de nombres al unificar varias carpetas.
+            unique_name = f"{sequence_folder}__{image_file.stem}"
 
-            lbl_src = lbls_dir / f"{img.stem}.txt"
-            lbl_dst = lbl_out / f"{new_stem}.txt"
-            
-            if lbl_src.exists():
-                copy_file(lbl_src, lbl_dst)
-                n_lbl += 1
+            image_dest_path = images_dest_dir / f"{unique_name}{image_file.suffix.lower()}"
+            copy_file(image_file, image_dest_path)
+            image_count += 1
+
+            label_source_path = sequence_labels_dir / f"{image_file.stem}.txt"
+            label_dest_path = labels_dest_dir / f"{unique_name}.txt"
+
+            if label_source_path.exists():
+                copy_file(label_source_path, label_dest_path)
+                label_count += 1
             else:
-                # [ESTRATEGIA TÉCNICA 2]: Generación de Background/Negative Samples
-                # Para robustecer el detector y minimizar Falsos Positivos, se generan
-                # anotaciones vacías para fotogramas donde no existe la clase objetivo (abeja).
-                lbl_dst.parent.mkdir(parents=True, exist_ok=True)
-                lbl_dst.write_text("")
+                # En YOLO, un archivo vacío representa una imagen negativa.
+                label_dest_path.parent.mkdir(parents=True, exist_ok=True)
+                label_dest_path.write_text("")
 
-    return n_img, n_lbl
+    return image_count, label_count
 
-def main(input_dir: str, output_dir: str):
+
+def main(input_dir: str, output_dir: str) -> None:
     """
-    Orquestador principal del pipeline de preparación de datos.
-    Estructura el dataset bajo el estándar YOLO y genera el manifiesto data.yaml.
+    Estructura el dataset bajo el formato esperado por YOLO, divide las
+    secuencias en train/val/test y genera el archivo data.yaml.
     """
-    det_root = Path(input_dir)
-    OUT = Path(output_dir)
-    OUT.mkdir(parents=True, exist_ok=True)
+    input_dataset_path = Path(input_dir)
+    output_dataset_path = Path(output_dir)
+    output_dataset_path.mkdir(parents=True, exist_ok=True)
 
-    seqs = sorted([p.name for p in det_root.iterdir() if p.is_dir()])
-    print(f"[*] Total de secuencias procesadas: {len(seqs)}")
+    # Cada subdirectorio del dataset original se interpreta como una secuencia.
+    all_sequences = sorted([p.name for p in input_dataset_path.iterdir() if p.is_dir()])
+    print(f"[*] Total de secuencias procesadas: {len(all_sequences)}")
 
-    # [ESTRATEGIA TÉCNICA 3]: Prevención de Data Leakage (Fuga de Datos)
-    # Se realiza el split (train/val/test) a nivel de secuencia de vídeo y no a nivel
-    # de fotograma. Esto evita que frames temporalmente adyacentes (y visualmente idénticos)
-    # contaminen los conjuntos de validación/test, garantizando una evaluación objetiva.
-    train_seqs = seqs[:-2]  
-    val_seqs   = [seqs[-2]] 
-    test_seqs  = [seqs[-1]] 
+    # Validación mínima para garantizar un reparto train/val/test válido.
+    if len(all_sequences) < 3:
+        raise ValueError(
+            "Se necesitan al menos 3 secuencias para generar los subconjuntos "
+            "de entrenamiento, validación y prueba."
+        )
+
+    # El reparto se realiza a nivel de secuencia para evitar data leakage
+    # entre entrenamiento, validación y evaluación.
+    train_seqs = all_sequences[:-2]
+    val_seqs = [all_sequences[-2]]
+    test_seqs = [all_sequences[-1]]
 
     print("[*] Generando conjunto de Entrenamiento (Train)...")
-    train_imgs, train_lbls = process_split("train", train_seqs, det_root, OUT)
-    
-    print("[*] Generando conjunto de Validación (Val)...")
-    val_imgs, val_lbls = process_split("val", val_seqs, det_root, OUT)
-    
-    print("[*] Generando conjunto de Evaluación (Test)...")
-    test_imgs, test_lbls = process_split("test", test_seqs, det_root, OUT)
+    train_imgs, train_lbls = process_split(
+        "train", train_seqs, input_dataset_path, output_dataset_path
+    )
 
-    print(f"\n[+] RESUMEN DEL DATASET:")
+    print("[*] Generando conjunto de Validación (Val)...")
+    val_imgs, val_lbls = process_split(
+        "val", val_seqs, input_dataset_path, output_dataset_path
+    )
+
+    print("[*] Generando conjunto de Evaluación (Test)...")
+    test_imgs, test_lbls = process_split(
+        "test", test_seqs, input_dataset_path, output_dataset_path
+    )
+
+    print("\n[+] RESUMEN DEL DATASET:")
     print(f"    - Train: {train_imgs} imágenes / {train_lbls} etiquetas")
     print(f"    - Val:   {val_imgs} imágenes / {val_lbls} etiquetas")
     print(f"    - Test:  {test_imgs} imágenes / {test_lbls} etiquetas\n")
 
-    # [ESTRATEGIA TÉCNICA 4]: Manifiesto YOLO
+    # Manifiesto del dataset en formato YOLO.
     yaml_text = (
-        f"path: {OUT.absolute()}\n"
+        f"path: {output_dataset_path.absolute()}\n"
         "train: train/images\n"
         "val: val/images\n"
         "test: test/images\n\n"
         "nc: 1\n"
         "names: ['bee']\n"
     )
-    
-    yaml_path = OUT / "data.yaml"
+
+    yaml_path = output_dataset_path / "data.yaml"
     yaml_path.write_text(yaml_text)
+
     print(f"[+] Manifiesto generado exitosamente en: {yaml_path}")
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Pipeline de ingesta y formateo de datasets para YOLO")
-    parser.add_argument("--input", type=str, default="datasets/raw/mendeley_dataset/detection",
-                        help="Directorio origen con datos crudos (Raw Data)")
-    parser.add_argument("--output", type=str, default="datasets/ready_for_yolo/mendeley_yolo",
-                        help="Directorio destino formateado para YOLO")
+    parser = argparse.ArgumentParser(
+        description="Pipeline de ingesta y formateo de datasets para YOLO"
+    )
+
+    parser.add_argument(
+        "--input",
+        type=str,
+        default="datasets/raw/mendeley_dataset/detection",
+        help="Directorio origen con datos crudos"
+    )
+
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="datasets/ready_for_yolo/mendeley_yolo",
+        help="Directorio destino formateado para YOLO"
+    )
+
     args = parser.parse_args()
-    
     main(args.input, args.output)

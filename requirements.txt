@@ -1,14 +1,17 @@
 # --- CORE VISIÓN Y DEEP LEARNING ---
 ultralytics==8.4.14
-opencv-python==4.13.0.92
+opencv_python==4.13.0.92
 
 # --- TRACKING MULTI-OBJETO ---
-boxmot==16.0.11
+boxmot==17.0.0
 
 # --- MANEJO DE DATOS Y MÉTRICAS ---
-numpy==2.4.3
-pandas==3.0.1
+numpy==2.4.4
+pandas==3.0.2
 motmetrics==1.4.0
 
 # --- INTERFAZ WEB ---
 streamlit==1.55.0
+
+
+# IMPORTANTE: PyTorch se instala por separado según el hardware (Ver README.md)
